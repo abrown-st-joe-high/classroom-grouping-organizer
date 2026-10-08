@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Station Groups</title>
+<style>
+:root{--bg:#f3f6f4;--ink:#1d2b33;--mut:#5d6d75;--card:#fff;--line:#cfd9d4;--group:#2f7d6b;--individual:#c2571a;--pair:#3b5bb5;--chip:#eef3f0}
+@media (prefers-color-scheme:dark){:root{--bg:#141b1f;--ink:#e6eeea;--mut:#9aabb2;--card:#1d272d;--line:#33434b;--chip:#273740}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 "Avenir Next","Segoe UI",system-ui,sans-serif}
+header{padding:16px 20px 8px}
+h1{margin:0 0 10px;font-size:1.5rem}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select,input{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+button{cursor:pointer}button:hover{border-color:var(--ink)}
+button.go{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+:focus-visible{outline:3px solid var(--pair);outline-offset:1px}
+main{padding:8px 20px 30px}
+details{margin-bottom:14px}summary{cursor:pointer;font-weight:600;padding:4px 0}
+textarea{width:100%;min-height:150px;margin:6px 0;padding:10px;font:inherit;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:6px}
+.hint{color:var(--mut);font-size:.9rem;margin:0}
+#board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(220px,1fr);gap:12px;overflow-x:auto;align-items:start;padding-bottom:8px}
+.col{background:var(--card);border:1px solid var(--line);border-top:5px solid var(--c);border-radius:8px;min-height:200px}
+.col.group{--c:var(--group)}.col.individual{--c:var(--individual)}.col.pair{--c:var(--pair)}
+.head{display:flex;flex-wrap:wrap;gap:6px;padding:10px;border-bottom:1px solid var(--line)}
+.head input{flex:1 1 100px;min-width:0;font-weight:600}
+.head select{flex:1 1 80px}
+.head .x{padding:6px 9px}
+.count{width:100%;color:var(--mut);font-size:.85rem}
+.body{padding:8px;min-height:120px;display:flex;flex-direction:column;gap:6px}
+.team{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:6px}
+.col.pair .team{border:1.5px solid var(--pair)}
+.col.group .team{border:1.5px solid var(--group)}
+.chip{background:var(--chip);border:1px solid var(--line);border-radius:5px;padding:4px 9px;cursor:grab;user-select:none}
+.chip.drag{opacity:.4}
+.body.over{background:var(--chip)}
+.empty{color:var(--mut);font-size:.9rem;padding:20px}
+@media print{header,details{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Station Groups</h1>
+  <div class="bar">
+    <select id="cls" aria-label="Class"></select>
+    <label>Stations <input id="n" type="number" min="1" max="8" style="width:4.5em"></label>
+    <button id="shuf" class="go">Shuffle students</button>
+    <button id="print">Print</button>
+    <button id="del">Delete class</button>
+  </div>
+</header>
+<main>
+  <details id="setup" open>
+    <summary>Class lists</summary>
+    <p class="hint">Put the class name on the first line of each list. Leave a blank line between classes. One student per line.</p>
+    <textarea id="txt" placeholder="Period 1&#10;Ana&#10;Ben&#10;Carla&#10;&#10;Period 2&#10;Dev&#10;Eli&#10;Fay"></textarea>
+    <button id="load" class="go">Save classes</button>
+  </details>
+  <div id="board"></div>
+</main>
+<script>
+const KEY='stationGroups.v1';
+let S={classes:{},current:null};
+try{const d=JSON.parse(localStorage.getItem(KEY));if(d&&d.classes)S=d}catch(e){}
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}};
+const $=id=>document.getElementById(id);
+const DEF=()=>[{name:'Group',type:'group',members:[]},{name:'Individual',type:'individual',members:[]},{name:'Pair',type:'pair',members:[]}];
+const cur=()=>S.classes[S.current];
+let dragName=null;
+
+function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+function distribute(c){
+  const n=c.stations.length;c.stations.forEach(s=>s.members=[]);
+  shuffle([...c.students]).forEach((x,i)=>c.stations[i%n].members.push(x));
+}
+function teams(s){
+  const m=s.members;
+  if(s.type==='group')return m.length?[m]:[];
+  if(s.type==='individual')return m.map(x=>[x]);
+  const t=[];for(let i=0;i<m.length;i+=2)t.push(m.slice(i,i+2));
+  if(t.length>1&&t[t.length-1].length===1)t[t.length-2].push(t.pop()[0]);
+  return t;
+}
+function parse(text){
+  return text.split(/\n\s*\n/).map(b=>b.split('\n').map(s=>s.trim()).filter(Boolean)).filter(l=>l.length).map(l=>{
+    const seen={};
+    const students=l.slice(1).map(n=>{seen[n]=(seen[n]||0)+1;return seen[n]>1?`${n} (${seen[n]})`:n});
+    return{name:l[0].replace(/^#+\s*/,''),students};
+  });
+}
+function esc(s){return s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+function render(){
+  const names=Object.keys(S.classes);
+  $('cls').innerHTML=names.map(n=>`<option ${n===S.current?'selected':''}>${esc(n)}</option>`).join('')||'<option>No classes yet</option>';
+  const c=cur(),b=$('board');
+  if(!c){b.innerHTML='<p class="empty">Paste your class lists above and choose Save classes.</p>';$('n').value='';return}
+  $('n').value=c.stations.length;
+  b.innerHTML=c.stations.map((s,i)=>{
+    const t=teams(s);
+    return`<section class="col ${s.type}"><div class="head">
+      <input data-i="${i}" data-f="name" value="${esc(s.name)}" aria-label="Station name">
+      <select data-i="${i}" data-f="type" aria-label="Station type">
+        ${['group','individual','pair'].map(k=>`<option value="${k}" ${k===s.type?'selected':''}>${k[0].toUpperCase()+k.slice(1)}</option>`).join('')}
+      </select>
+      <button class="x" data-rm="${i}" title="Remove station" aria-label="Remove station">✕</button>
+      <span class="count">${s.members.length} students${s.type==='pair'?`, ${t.length} teams`:''}</span></div>
+      <div class="body" data-i="${i}">${t.map(g=>`<div class="team">${g.map(n=>`<span class="chip" draggable="true" data-n="${esc(n)}">${esc(n)}</span>`).join('')}</div>`).join('')}</div></section>`;
+  }).join('');
+}
+
+function moveStudent(name,toStation,beforeName){
+  const c=cur();
+  c.stations.forEach(s=>{s.members=s.members.filter(x=>x!==name)});
+  const m=c.stations[toStation].members;
+  const idx=beforeName?m.indexOf(beforeName):-1;
+  if(idx>=0)m.splice(idx,0,name);else m.push(name);
+  save();render();
+}
+
+const board=$('board');
+board.addEventListener('dragstart',e=>{const ch=e.target.closest('.chip');if(!ch)return;dragName=ch.dataset.n;e.dataTransfer.setData('text/plain',dragName);e.dataTransfer.effectAllowed='move';ch.classList.add('drag')});
+board.addEventListener('dragend',()=>{dragName=null;render()});
+board.addEventListener('dragover',e=>{const b=e.target.closest('.body');if(b&&dragName){e.preventDefault();b.classList.add('over')}});
+board.addEventListener('dragleave',e=>{const b=e.target.closest('.body');if(b)b.classList.remove('over')});
+board.addEventListener('drop',e=>{
+  const b=e.target.closest('.body');if(!b||!dragName)return;e.preventDefault();
+  const ch=e.target.closest('.chip');
+  const name=dragName;dragName=null;
+  moveStudent(name,+b.dataset.i,ch&&ch.dataset.n!==name?ch.dataset.n:null);
+});
+board.addEventListener('change',e=>{
+  const f=e.target.dataset.f;if(!f)return;
+  cur().stations[+e.target.dataset.i][f]=e.target.value;save();render();
+});
+board.addEventListener('click',e=>{
+  const rm=e.target.closest('[data-rm]');if(!rm)return;
+  const c=cur();if(c.stations.length<2)return;
+  const [gone]=c.stations.splice(+rm.dataset.rm,1);
+  gone.members.forEach(m=>c.stations[0].members.push(m));
+  save();render();
+});
+
+$('cls').onchange=e=>{S.current=e.target.value;save();render()};
+$('n').onchange=e=>{
+  const c=cur();if(!c)return;
+  const n=Math.max(1,Math.min(8,+e.target.value||1));
+  while(c.stations.length<n)c.stations.push({name:'Station '+(c.stations.length+1),type:'individual',members:[]});
+  c.stations.length=n;
+  distribute(c);save();render();
+};
+$('shuf').onclick=()=>{const c=cur();if(c){distribute(c);save();render()}};
+$('print').onclick=()=>window.print();
+$('del').onclick=()=>{
+  if(!S.current||!confirm(`Delete "${S.current}"?`))return;
+  delete S.classes[S.current];S.current=Object.keys(S.classes)[0]||null;save();render();
+};
+$('load').onclick=()=>{
+  const list=parse($('txt').value);if(!list.length)return;
+  list.forEach(({name,students})=>{
+    const c=S.classes[name]||(S.classes[name]={students:[],stations:DEF()});
+    c.students=students;distribute(c);
+  });
+  S.current=list[0].name;save();render();
+  $('txt').value='';$('setup').open=false;
+};
+if(!S.current||!S.classes[S.current])S.current=Object.keys(S.classes)[0]||null;
+if(S.current)$('setup').open=false;
+render();
+</script>
+</body>
+</html>
